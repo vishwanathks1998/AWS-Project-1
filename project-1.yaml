@@ -1,0 +1,329 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Here are the steps to set up an AWS project using Auto Scaling Groups (ASG), EC2 instances, and an Elastic Load Balancer (ELB):"
+
+Resources:
+# Creating VPC
+  MyVPC:                             
+    Type: AWS::EC2::VPC              # Default
+    Properties:
+      CidrBlock: "192.168.10.0/24"   # Give CIDR range for your VPC
+      EnableDnsHostnames: true       # Every EC2 gets a default hostname based on its private IP
+      EnableDnsSupport: true         # AWS runs a DNS resolver in your VPC
+      Tags:                          
+        - Key: Name                  # Set name of your VPC
+          Value: MyVPC               # Provide name
+
+# Creating Private subnet 
+  privateA:                                       
+    Type: AWS::EC2::Subnet           # default
+    Properties:
+      VpcId: !Ref MyVPC              # Give Reference name of VPC inside which you are creating subnet
+      CidrBlock: "192.168.10.0/26"   # Give CIDR range of your subnet
+      MapPublicIpOnLaunch: false     # Donot assign public ip to ec2 that are launched inside this subnet
+      AvailabilityZone: us-east-1a   # Give Availability Zone name
+      Tags:
+        - Key: Name                  # Set name of your subnet
+          Value: "pvt-a"             # Provide name
+
+# Creating Private subnet 
+  privateB:                 
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "192.168.10.64/26"
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: us-east-1b
+      Tags:
+        - Key: Name
+          Value: "pvt-b"
+
+# Creating Public subnet  
+  publicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "192.168.10.128/26"
+      MapPublicIpOnLaunch: true              # Assign public ip to ec2 that are launched inside this subnet
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: "pub-a"
+
+# Creating Public subnet   
+  publicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: "192.168.10.192/26"
+      MapPublicIpOnLaunch: true              # Assign public ip to ec2 that are launched inside this subnet
+      AvailabilityZone: us-east-1b
+      Tags:
+        - Key: Name
+          Value: "pub-b"
+
+# Creating Public router
+  RouterPub:
+    Type: AWS::EC2::RouteTable                  # Default
+    Properties:                                 
+      VpcId: !Ref MyVPC                         # Give VPC reference name
+      Tags:
+        - Key: Name
+          Value: "pub-router"
+
+# Creating Private router
+  RouterPvt:
+    Type: AWS::EC2::RouteTable                 
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: "pvt-router"
+
+# Associating/Attaching subnets to router
+  MySubnetAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref publicA                       # Give reference subnet name  
+      RouteTableId: !Ref RouterPub                 # Give router reference name
+
+  MySubnetAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref publicB
+      RouteTableId: !Ref RouterPub
+  
+  MySubnetAssociation3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref privateA
+      RouteTableId: !Ref RouterPvt
+
+  MySubnetAssociation4:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref privateB
+      RouteTableId: !Ref RouterPvt
+
+# Create Internet gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: "Internet-Gateway"
+
+# Attaching internet gateway to VPC          
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+# Adding route rule to forward traffic from public roter to internet gateway
+  PubRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouterPub
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+# Creating Elastic Ip
+  MyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Tags:
+        - Key: Name
+          Value: "Elastic-Ip"  
+
+# Creating NAT Gateway  
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt MyEIP.AllocationId
+      SubnetId: !Ref publicA
+      Tags:
+        - Key: Name
+          Value: "NAT-Gateway" 
+
+# Adding route rule to forward traffic from private route to NAT gateway
+  PvtRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouterPvt
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGateway
+
+# Creating security group for LoadBalancer
+  SgLB:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow Internet"
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:                    # Add inbound rule to allow port 80 from anywhere
+        - IpProtocol: "tcp"
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+      Tags:
+        - Key: Name
+          Value: "SecurityGroup_LB" 
+
+# Creating security group for ec2
+  SgWebapp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow Traffic from SgLB"
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:                  # Add inbound rule to allow port 80 from security group
+        - IpProtocol: "tcp"
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref SgLB
+      Tags:
+        - Key: Name
+          Value: "SecurityGroup_Ec2" 
+
+# Creating LoadBalancer
+  InternetLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: InternetLB
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SgLB
+      Subnets:
+        - !Ref publicA
+        - !Ref publicB
+      Tags:
+        - Key: Name
+          Value: "Internet-LB" 
+
+# Creating Target group and allow traffic for port 80
+  PrivateInstanceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: TargetGroup
+      VpcId: !Ref MyVPC
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: "Target-GP" 
+
+# Creating connection between load balancer and target group        
+  LoadbalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref InternetLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      # Forwarding traffic from load balancer to target group
+      DefaultActions:
+        - Type: forward                                      
+          TargetGroupArn: !Ref PrivateInstanceTargetGroup
+
+# Defining Template for ec2
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: "MyEc2Template"
+      LaunchTemplateData:
+        ImageId: "ami-0953476d60561c955"
+        InstanceType: "t2.micro"
+        KeyName: "pem-key"
+        SecurityGroupIds:
+          - !Ref SgWebapp
+        # User data for creating a simple website that will display Hello-World
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            yum update -y
+            yum install -y httpd
+            echo "Hello-World" > /var/www/html/index.html
+            systemctl restart httpd
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: "MyEC2Instance"
+
+# Creating Autoscaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:                                         # Give your template Id and version
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:                                      # Select the subnets where your ec2 will be launched
+        - !Ref privateA
+        - !Ref privateB
+      TargetGroupARNs:                                        # This will add newly launched ec2 into target group
+        - !Ref PrivateInstanceTargetGroup
+      MinSize: 1
+      MaxSize: 4
+      MetricsCollection:                                      # metrics should be collected after every 1 minute
+        - Granularity: "1Minute"
+      Tags:
+        - Key: Name
+          Value: "AutoScaling-webapp" 
+          PropagateAtLaunch: false
+
+# Creating alarm for high CPU usage
+  CPUAlarmHigh:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: "Ring and inform scale out policy when CPU usage exceeds 70%"
+      MetricName: "CPUUtilization"
+      Namespace: "AWS/EC2"
+      Statistic: "Average"
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 70
+      ComparisonOperator: "GreaterThanThreshold"
+      AlarmActions:
+        - !Ref ScaleOutPolicy
+      Dimensions:
+        - Name: "AutoScalingGroupName"
+          Value: !Ref AutoScalingGroup
+      AlarmName: "HighCpu-alarm"
+
+# Create an alarm for CPU utilization below 50%
+  CPUAlarmLow:
+    Type: "AWS::CloudWatch::Alarm"
+    Properties:
+      AlarmDescription: "Scale In when CPU usage below 50%"
+      MetricName: "CPUUtilization"
+      Namespace: "AWS/EC2"
+      Statistic: "Average"
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 50
+      ComparisonOperator: "LessThanThreshold"
+      AlarmActions:
+        - !Ref ScaleInPolicy
+      Dimensions:
+        - Name: "AutoScalingGroupName"
+          Value: !Ref AutoScalingGroup
+      AlarmName: "LowCPU_Alarm"
+
+# Creating Scale-out policy
+  ScaleOutPolicy:
+    Type: "AWS::AutoScaling::ScalingPolicy"
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      AdjustmentType: "ChangeInCapacity"
+      ScalingAdjustment: 2
+      Cooldown: 120
+
+# Creating Scale-In policy
+  ScaleInPolicy:
+    Type: "AWS::AutoScaling::ScalingPolicy"
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      AdjustmentType: "ChangeInCapacity"
+      ScalingAdjustment: -1
+      Cooldown: 120    
+
